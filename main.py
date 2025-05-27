@@ -1,28 +1,35 @@
-from flask import Flask, request, redirect, url_for, render_template_string, send_from_directory, Response, session
+from flask import Flask, request, redirect, url_for, render_template_string, session
 import os
-from werkzeug.utils import secure_filename
+import cloudinary
+import cloudinary.uploader
 from datetime import datetime
 from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'
-UPLOAD_FOLDER = 'uploads'
+
 USERNAME = 'admin'
 PASSWORD = 'Password@123'
 
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# --- CLOUDINARY CONFIGURATION ---
+cloudinary.config(
+    cloud_name='dvygrx12d',       # <<< CHANGE THIS
+    api_key='234675925782836',             # <<< CHANGE THIS
+    api_secret='jZOlVFcZkz5QhcXcXvia6yGqaDo',       # <<< CHANGE THIS
+    secure=True
+)
+
+# In-memory list to store uploads (optionally, you could use a database)
+entries = []
 
 
 # -------------------- AUTH DECORATOR --------------------
 def login_required(f):
-
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
-
     return decorated_function
 
 
@@ -37,7 +44,6 @@ landing_html = '''
     form { background: #1f1f1f; padding: 20px; border-radius: 10px; display: inline-block; }
     input, textarea { width: 300px; padding: 10px; margin: 10px 0; border-radius: 5px; border: none; }
     button { padding: 10px 20px; border: none; background: #03dac6; color: #000; border-radius: 5px; cursor: pointer; }
-    a { color: #bb86fc; }
   </style>
 </head>
 <body>
@@ -51,31 +57,44 @@ landing_html = '''
 </html>
 '''
 
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # File Upload
         if 'file' in request.files and request.files['file'].filename != '':
             file = request.files['file']
-            filename = datetime.now().strftime(
-                '%Y%m%d%H%M%S_') + secure_filename(file.filename)
-            file.save(os.path.join(UPLOAD_FOLDER, filename))
-            with open(os.path.join(UPLOAD_FOLDER, filename + '.meta'),
-                      'w') as f:
-                f.write(timestamp)
+            upload_result = cloudinary.uploader.upload(file, resource_type="auto")
+            entries.append({
+                'name': file.filename,
+                'url': upload_result['secure_url'],
+                'timestamp': timestamp,
+                'is_text': False
+            })
+
+        # Text Upload
         elif 'text' in request.form and request.form['text'].strip() != '':
+            text_content = request.form['text']
             filename = datetime.now().strftime('%Y%m%d%H%M%S_text.txt')
-            with open(os.path.join(UPLOAD_FOLDER, filename), 'w') as f:
-                f.write(request.form['text'])
-            with open(os.path.join(UPLOAD_FOLDER, filename + '.meta'),
-                      'w') as f:
-                f.write(timestamp)
+            with open(filename, 'w') as f:
+                f.write(text_content)
+            upload_result = cloudinary.uploader.upload(filename, resource_type="raw")
+            os.remove(filename)  # clean up local file
+            entries.append({
+                'name': filename,
+                'url': upload_result['secure_url'],
+                'timestamp': timestamp,
+                'is_text': True,
+                'text': text_content
+            })
+
         return redirect(url_for('index'))
+
     return render_template_string(landing_html)
 
 
-# -------------------- LOGIN PAGE --------------------
+# -------------------- LOGIN --------------------
 login_html = '''
 <!doctype html>
 <html>
@@ -101,13 +120,11 @@ login_html = '''
 </html>
 '''
 
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error = None
     if request.method == 'POST':
-        if request.form['username'] == USERNAME and request.form[
-                'password'] == PASSWORD:
+        if request.form['username'] == USERNAME and request.form['password'] == PASSWORD:
             session['logged_in'] = True
             return redirect(url_for('results'))
         else:
@@ -115,14 +132,13 @@ def login():
     return render_template_string(login_html, error=error)
 
 
-# -------------------- LOGOUT --------------------
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     return redirect(url_for('login'))
 
 
-# -------------------- RESULTS PAGE --------------------
+# -------------------- RESULTS --------------------
 results_html = '''
 <!doctype html>
 <html>
@@ -145,57 +161,22 @@ results_html = '''
     <div class="card">
       <strong>{{ entry.name }}</strong><br>
       <div class="timestamp">Uploaded: {{ entry.timestamp }}</div>
-      {% if entry.name.endswith('.txt') %}
-        <div class="text-preview">{{ open('uploads/' + entry.name).read() }}</div><br>
+      {% if entry.is_text %}
+        <div class="text-preview">{{ entry.text }}</div><br>
       {% endif %}
-      <a href="/download/{{ entry.name }}">Download</a>
-      <a href="/delete/{{ entry.name }}">Delete</a>
+      <a href="{{ entry.url }}" target="_blank">View/Download</a>
     </div>
   {% endfor %}
 </body>
 </html>
 '''
 
-
 @app.route('/results')
 @login_required
 def results():
-    entries = []
-    for fname in os.listdir(UPLOAD_FOLDER):
-        if fname.endswith('.meta'):
-            continue
-        meta_path = os.path.join(UPLOAD_FOLDER, fname + '.meta')
-        timestamp = ''
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                timestamp = f.read().strip()
-        entries.append({'name': fname, 'timestamp': timestamp})
-    return render_template_string(results_html, entries=entries, open=open)
+    return render_template_string(results_html, entries=entries)
 
 
-# -------------------- DOWNLOAD FILE --------------------
-@app.route('/download/<filename>')
-@login_required
-def download(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
-
-
-# -------------------- DELETE FILE --------------------
-@app.route('/delete/<filename>')
-@login_required
-def delete(filename):
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
-    meta_path = file_path + '.meta'
-    if os.path.exists(file_path):
-        os.remove(file_path)
-    if os.path.exists(meta_path):
-        os.remove(meta_path)
-    return redirect(url_for('results'))
-
-
-# -----------
-# -------------------- RUN APP ON RENDER --------------------
+# -------------------- RUN --------------------
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))  # Render assigns port
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, port=5000)
