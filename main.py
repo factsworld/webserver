@@ -13,15 +13,14 @@ PASSWORD = 'Password@123'
 
 # --- CLOUDINARY CONFIGURATION ---
 cloudinary.config(
-    cloud_name='dvygrx12d',       # <<< CHANGE THIS
-    api_key='234675925782836',             # <<< CHANGE THIS
-    api_secret='jZOlVFcZkz5QhcXcXvia6yGqaDo',       # <<< CHANGE THIS
+    cloud_name='dvygrx12d',
+    api_key='234675925782836',
+    api_secret='jZOlVFcZkz5QhcXcXvia6yGqaDo',
     secure=True
 )
 
-# In-memory list to store uploads (optionally, you could use a database)
+# In-memory list to store uploads (use a DB for production persistence)
 entries = []
-
 
 # -------------------- AUTH DECORATOR --------------------
 def login_required(f):
@@ -31,7 +30,6 @@ def login_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
-
 
 # -------------------- LANDING PAGE --------------------
 landing_html = '''
@@ -80,7 +78,7 @@ def index():
             with open(filename, 'w') as f:
                 f.write(text_content)
             upload_result = cloudinary.uploader.upload(filename, resource_type="raw")
-            os.remove(filename)  # clean up local file
+            os.remove(filename)
             entries.append({
                 'name': filename,
                 'url': upload_result['secure_url'],
@@ -92,7 +90,6 @@ def index():
         return redirect(url_for('index'))
 
     return render_template_string(landing_html)
-
 
 # -------------------- LOGIN --------------------
 login_html = '''
@@ -131,12 +128,10 @@ def login():
             error = 'Invalid Credentials'
     return render_template_string(login_html, error=error)
 
-
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     return redirect(url_for('login'))
-
 
 # -------------------- RESULTS --------------------
 results_html = '''
@@ -176,7 +171,4 @@ results_html = '''
 def results():
     return render_template_string(results_html, entries=entries)
 
-
-# -------------------- RUN --------------------
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+# No `app.run()` here — Gunicorn will handle it in production
